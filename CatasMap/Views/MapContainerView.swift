@@ -38,6 +38,15 @@ struct MapContainerView: View {
             Text("Se borrará tu medición actual para que puedas dibujar una nueva.")
         }
         .sheet(isPresented: $showSaveSheet) { saveSheet }
+        .onChange(of: showSaveSheet) { _, shown in
+            guard shown else { return }
+            if let id = vm.currentSavedParcelID,
+               let existing = persistence.savedParcels.first(where: { $0.id == id }) {
+                saveName = existing.customName
+            } else {
+                saveName = vm.parcel?.cadastralRef ?? "Mi finca"
+            }
+        }
     }
 
     // MARK: Mapa
@@ -85,17 +94,7 @@ struct MapContainerView: View {
 
             // Guardar (disponible si hay parcela catastral cargada)
             if vm.hasParcel {
-                Button {
-                    if let id = vm.currentSavedParcelID,
-                       let existing = persistence.savedParcels.first(where: { $0.id == id }) {
-                        // Finca ya guardada → usar el nombre que tiene
-                        saveName = existing.customName
-                    } else {
-                        // Finca nueva → usar la referencia catastral como nombre por defecto
-                        saveName = vm.parcel?.cadastralRef ?? "Mi finca"
-                    }
-                    showSaveSheet = true
-                } label: {
+                Button { showSaveSheet = true } label: {
                     Image(systemName: "square.and.arrow.down")
                         .iconStyle()
                 }
@@ -244,7 +243,6 @@ struct MapContainerView: View {
                 }
 
                 // ── Guardar (sobreescribir o crear nuevo) ─────────────────
-                let nameOK = !saveName.trimmingCharacters(in: .whitespaces).isEmpty
                 Section {
                     Button {
                         save(asNew: false)
@@ -292,6 +290,10 @@ struct MapContainerView: View {
             vm.currentSavedParcelID = parcel.id
         }
         showSaveSheet = false
+    }
+
+    private var nameOK: Bool {
+        !saveName.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     /// True si el nombre ya lo usa otra finca distinta a la actual (para "Guardar")
