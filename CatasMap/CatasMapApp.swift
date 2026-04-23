@@ -12,6 +12,15 @@ struct CatasMapApp: App {
                 .environment(searchViewModel)
                 .environment(mapViewModel)
                 .environment(persistence)
+                // Ocultar teclado al tocar en cualquier otro sitio
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        UIApplication.shared.sendAction(
+                            #selector(UIResponder.resignFirstResponder),
+                            to: nil, from: nil, for: nil
+                        )
+                    }
+                )
         }
     }
 }

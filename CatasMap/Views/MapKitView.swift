@@ -2,8 +2,6 @@ import SwiftUI
 import MapKit
 import UIKit
 
-// UIViewRepresentable wrapper for MKMapView.
-// Handles parcel polygon, free-drawing overlay, and tap-to-add-point in drawing mode.
 struct MapKitView: UIViewRepresentable {
     var mapType: MKMapType
     var flyToRegion: MKCoordinateRegion?
@@ -19,39 +17,47 @@ struct MapKitView: UIViewRepresentable {
         map.showsUserLocation = true
         map.isRotateEnabled = false
 
-        // Default region: centre of Galicia
         map.setRegion(MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 42.78, longitude: -7.86),
             span: MKCoordinateSpan(latitudeDelta: 4.5, longitudeDelta: 4.5)
         ), animated: false)
 
-        let tap = UITapGestureRecognizer(target: context.coordinator,
-                                         action: #selector(Coordinator.handleTap(_:)))
+        let tap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTap(_:))
+        )
+        // No bloquear los gestos propios del mapa (pan, zoom, etc.)
+        tap.cancelsTouchesInView = false
+        tap.delegate = context.coordinator
         map.addGestureRecognizer(tap)
         return map
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
+        // CRÍTICO: actualizar siempre el parent para que handleTap
+        // lea el isDrawingMode correcto en cada render de SwiftUI.
+        context.coordinator.parent = self
+
         map.mapType = mapType
 
-        // Fly to region when requested
-        if let region = flyToRegion, context.coordinator.lastFlyTo !== flyToRegion as AnyObject? {
-            context.coordinator.lastFlyToID = region.center.latitude + region.center.longitude
-            if abs(map.region.center.latitude - region.center.latitude) > 0.0001
-                || abs(map.region.center.longitude - region.center.longitude) > 0.0001 {
+        // Volar a la región solicitada si cambió
+        if let region = flyToRegion {
+            let token = region.center.latitude + region.center.longitude
+            if abs(context.coordinator.lastFlyToken - token) > 0.00001 {
+                context.coordinator.lastFlyToken = token
                 map.setRegion(region, animated: true)
             }
         }
 
-        // Rebuild overlays only when data changes
-        let newOverlayKey = overlayKey()
-        guard context.coordinator.lastOverlayKey != newOverlayKey else { return }
-        context.coordinator.lastOverlayKey = newOverlayKey
+        // Reconstruir overlays solo si los datos cambiaron
+        let newKey = overlayKey()
+        guard context.coordinator.lastOverlayKey != newKey else { return }
+        context.coordinator.lastOverlayKey = newKey
 
         map.removeOverlays(map.overlays)
         map.removeAnnotations(map.annotations.filter { !($0 is MKUserLocation) })
 
-        // Parcel polygon (blue)
+        // Polígono catastral (azul)
         if let ring = parcelCoordinates.first, !ring.isEmpty {
             var coords = ring
             let poly = MKPolygon(coordinates: &coords, count: coords.count)
@@ -59,7 +65,7 @@ struct MapKitView: UIViewRepresentable {
             map.addOverlay(poly, level: .aboveRoads)
         }
 
-        // Drawing overlay
+        // Dibujo del usuario (rojo)
         if !drawnPoints.isEmpty {
             if isDrawingClosed && drawnPoints.count >= 3 {
                 var pts = drawnPoints
@@ -72,7 +78,6 @@ struct MapKitView: UIViewRepresentable {
                 map.addOverlay(line, level: .aboveRoads)
             }
 
-            // Point annotations
             for (i, pt) in drawnPoints.enumerated() {
                 let ann = MKPointAnnotation()
                 ann.coordinate = pt
@@ -84,50 +89,55 @@ struct MapKitView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    // Generates a stable string key representing current overlay data
     private func overlayKey() -> String {
-        let parcelKey = parcelCoordinates.first?.first.map { "\($0.latitude),\($0.longitude)" } ?? ""
-        let drawKey = drawnPoints.map { "\($0.latitude),\($0.longitude)" }.joined(separator: "|")
-        return "\(parcelKey)|\(drawKey)|\(isDrawingClosed)"
+        let p = parcelCoordinates.first?.first.map { "\($0.latitude),\($0.longitude)" } ?? ""
+        let d = drawnPoints.map { "\($0.latitude),\($0.longitude)" }.joined(separator: "|")
+        return "\(p)|\(d)|\(isDrawingClosed)"
     }
 
     // MARK: Coordinator
 
-    class Coordinator: NSObject, MKMapViewDelegate {
+    class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
         var parent: MapKitView
         var lastOverlayKey = ""
-        var lastFlyToID: Double = 0
-
-        // Workaround: use the region center sum as a change token
-        var lastFlyTo: AnyObject? = nil
+        var lastFlyToken: Double = 0
 
         init(_ parent: MapKitView) { self.parent = parent }
 
+        // Permitir que nuestro tap coexista con los gestos internos del MKMapView
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+        ) -> Bool { true }
+
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
             guard parent.isDrawingMode,
+                  gesture.state == .ended,
                   let map = gesture.view as? MKMapView else { return }
-            let point = gesture.location(in: map)
-            let coord = map.convert(point, toCoordinateFrom: map)
+            let pt = gesture.location(in: map)
+            let coord = map.convert(pt, toCoordinateFrom: map)
             parent.onTap(coord)
         }
+
+        // MARK: MKMapViewDelegate
 
         func mapView(_ map: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let polygon = overlay as? MKPolygon {
                 let r = MKPolygonRenderer(polygon: polygon)
                 if polygon.title == "parcel" {
-                    r.fillColor  = UIColor.systemBlue.withAlphaComponent(0.15)
-                    r.strokeColor = UIColor.systemBlue
-                    r.lineWidth  = 2.5
+                    r.fillColor   = UIColor.systemBlue.withAlphaComponent(0.15)
+                    r.strokeColor = .systemBlue
+                    r.lineWidth   = 2.5
                 } else {
-                    r.fillColor  = UIColor.systemRed.withAlphaComponent(0.15)
-                    r.strokeColor = UIColor.systemRed
-                    r.lineWidth  = 2.5
+                    r.fillColor   = UIColor.systemRed.withAlphaComponent(0.15)
+                    r.strokeColor = .systemRed
+                    r.lineWidth   = 2.5
                 }
                 return r
             }
             if let polyline = overlay as? MKPolyline {
                 let r = MKPolylineRenderer(polyline: polyline)
-                r.strokeColor = UIColor.systemRed
+                r.strokeColor = .systemRed
                 r.lineWidth   = 2.5
                 r.lineDashPattern = [6, 4]
                 return r
@@ -138,9 +148,9 @@ struct MapKitView: UIViewRepresentable {
         func mapView(_ map: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
             guard !(annotation is MKUserLocation) else { return nil }
             let view = MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: "drawn")
-            view.markerTintColor = annotation.title == "Inicio" ? .systemGreen : .systemRed
-            view.glyphText = annotation.title == "Inicio" ? "★" : nil
-            view.displayPriority = .required
+            view.markerTintColor    = annotation.title == "Inicio" ? .systemGreen : .systemRed
+            view.glyphText          = annotation.title == "Inicio" ? "★" : nil
+            view.displayPriority    = .required
             return view
         }
     }
