@@ -22,7 +22,7 @@ class SearchViewModel {
 
     func loadMunicipios() {
         guard
-            let url = Bundle.main.url(forResource: "municipios", withExtension: "json"),
+            let url  = Bundle.main.url(forResource: "municipios", withExtension: "json"),
             let data = try? Data(contentsOf: url),
             let decoded = try? JSONDecoder().decode(MunicipiosData.self, from: data)
         else { return }
@@ -40,12 +40,22 @@ class SearchViewModel {
             errorMessage = "Introduce una referencia catastral"
             return
         }
+
+        // Pass selected names in lowercase as required by the catastro API.
+        // Empty strings are accepted by the API when the refcat is provided.
+        let municipio = selectedMunicipality?.nombre.lowercased() ?? ""
+        let provincia = selectedProvince?.nombre.lowercased() ?? ""
+
         isLoading = true
         errorMessage = nil
         foundParcel = nil
 
         do {
-            foundParcel = try await CadastroService.shared.searchParcel(ref: ref)
+            foundParcel = try await CadastroService.shared.searchParcel(
+                ref: ref,
+                municipio: municipio,
+                provincia: provincia
+            )
         } catch {
             errorMessage = error.localizedDescription
         }

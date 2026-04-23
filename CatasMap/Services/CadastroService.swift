@@ -3,114 +3,157 @@ import CoreLocation
 
 struct CadastralFeature {
     let cadastralRef: String
-    let coordinates: [[CLLocationCoordinate2D]]
+    let coordinates: [[CLLocationCoordinate2D]]   // outer ring first; inner rings are holes
+    let centerCoordinate: CLLocationCoordinate2D? // from API 1 (optional, for fallback)
 }
 
 class CadastroService {
     static let shared = CadastroService()
 
-    // Official catastro INSPIRE WFS endpoints (tried in order)
-    private let endpoints = [
-        "https://ovc.catastro.meh.es/INSPIRE/wfscatastro.aspx",
-        "https://www.catastro.minhap.es/INSPIRE/CadastralParcels/wfs",
-    ]
+    // API 1 – Centro de la parcela (valida la referencia)
+    private let coordBase = "https://ovc.catastro.meh.es/OVCServWeb/OVCWcfCallejero/COVCCoordenadas.svc/rest/Consulta_CPMRC"
 
-    func searchParcel(ref: String) async throws -> CadastralFeature {
-        let cleanRef = ref.trimmingCharacters(in: .whitespacesAndNewlines)
+    // API 2 – Geometría GML del polígono catastral
+    private let wfsBase   = "https://ovc.catastro.meh.es/INSPIRE/wfsCP.aspx"
+
+    // MARK: Public
+
+    func searchParcel(ref: String, municipio: String, provincia: String) async throws -> CadastralFeature {
+        let cleanRef = ref.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard !cleanRef.isEmpty else { throw CadastroError.emptyReference }
 
-        var lastError: Error = CadastroError.serverError
+        // Step 1: validate reference and get center coord
+        let (center, _) = try await fetchCenter(ref: cleanRef, municipio: municipio, provincia: provincia)
 
-        for base in endpoints {
-            do {
-                return try await fetchFromEndpoint(base, ref: cleanRef)
-            } catch CadastroError.notFound {
-                throw CadastroError.notFound          // definitive: parcel doesn't exist
-            } catch CadastroError.parseError {
-                throw CadastroError.parseError        // definitive: bad data
-            } catch {
-                lastError = error                      // network/DNS: try next endpoint
-            }
-        }
+        // Step 2: get polygon geometry
+        let rings = try await fetchPolygon(ref: cleanRef)
 
-        throw lastError
+        return CadastralFeature(cadastralRef: cleanRef, coordinates: rings, centerCoordinate: center)
     }
 
-    // MARK: Private
+    // MARK: Step 1 – Consulta_CPMRC
 
-    private func fetchFromEndpoint(_ base: String, ref: String) async throws -> CadastralFeature {
-        // Use URLComponents so single quotes in CQL_FILTER are percent-encoded automatically
-        var comps = URLComponents(string: base)!
+    private func fetchCenter(ref: String, municipio: String, provincia: String) async throws -> (CLLocationCoordinate2D, Int) {
+        var comps = URLComponents(string: coordBase)!
         comps.queryItems = [
-            URLQueryItem(name: "SERVICE",     value: "WFS"),
-            URLQueryItem(name: "VERSION",     value: "2.0.0"),
-            URLQueryItem(name: "REQUEST",     value: "GetFeature"),
-            URLQueryItem(name: "TYPENAMES",   value: "cp:CadastralParcel"),
-            URLQueryItem(name: "CQL_FILTER",  value: "nationalCadastralReference='\(ref)'"),
-            URLQueryItem(name: "outputFormat",value: "application/json"),
-            URLQueryItem(name: "SRSNAME",     value: "EPSG:4326"),   // get WGS84 directly
+            URLQueryItem(name: "RefCat",    value: ref),
+            URLQueryItem(name: "Municipio", value: municipio.lowercased()),
+            URLQueryItem(name: "Provincia", value: provincia.lowercased()),
         ]
-
         guard let url = comps.url else { throw CadastroError.invalidURL }
 
-        var request = URLRequest(url: url, timeoutInterval: 20)
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw CadastroError.serverError
+        let (data, response) = try await URLSession.shared.data(from: url)
+        if let http = response as? HTTPURLResponse, http.statusCode == 404 {
+            throw CadastroError.notFound
         }
 
-        return try parseGeoJSON(data: data, ref: ref)
-    }
+        let xml = String(data: data, encoding: .utf8) ?? ""
 
-    private func parseGeoJSON(data: Data, ref: String) throws -> CadastralFeature {
-        guard
-            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let features = json["features"] as? [[String: Any]],
-            !features.isEmpty
-        else {
+        // Detect error response (catastro returns <lerr> or <des> with error text)
+        if xml.contains("<lerr>") || xml.contains("<err>") {
             throw CadastroError.notFound
         }
 
         guard
-            let feature  = features.first,
-            let geometry = feature["geometry"] as? [String: Any],
-            let geomType = geometry["type"] as? String
+            let xcenStr = xmlValue(xml, tag: "xcen"), let xcen = Double(xcenStr),
+            let ycenStr = xmlValue(xml, tag: "ycen"), let ycen = Double(ycenStr),
+            let srsStr  = xmlValue(xml, tag: "srs")
         else {
+            throw CadastroError.notFound
+        }
+
+        // srs looks like "EPSG:25829" or "EPSG:25830"
+        let epsg = Int(srsStr.replacingOccurrences(of: "EPSG:", with: "")) ?? 25830
+        let coord = CoordinateConverter.utmToLatLon(easting: xcen, northing: ycen, epsg: epsg)
+        return (coord, epsg)
+    }
+
+    // MARK: Step 2 – wfsCP.aspx (GML)
+
+    private func fetchPolygon(ref: String) async throws -> [[CLLocationCoordinate2D]] {
+        var comps = URLComponents(string: wfsBase)!
+        comps.queryItems = [
+            URLQueryItem(name: "service",          value: "wfs"),
+            URLQueryItem(name: "version",          value: "2"),
+            URLQueryItem(name: "request",          value: "getfeature"),
+            URLQueryItem(name: "STOREDQUERIE_ID",  value: "GetParcel"),
+            URLQueryItem(name: "refcat",           value: ref),
+            URLQueryItem(name: "srsname",          value: "EPSG:25830"),
+        ]
+        guard let url = comps.url else { throw CadastroError.invalidURL }
+
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let gml = String(data: data, encoding: .utf8) ?? ""
+        return try parseGML(gml)
+    }
+
+    // MARK: GML parser
+
+    private func parseGML(_ gml: String) throws -> [[CLLocationCoordinate2D]] {
+        // Match <gml:posList ...>...</gml:posList>  (or without namespace prefix)
+        let pattern = #"<(?:gml:)?posList[^>]*>([\s\S]*?)</(?:gml:)?posList>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
             throw CadastroError.parseError
         }
 
-        // SRSNAME=EPSG:4326 → coordinates arrive as [longitude, latitude]
+        let nsGml = gml as NSString
+        let matches = regex.matches(in: gml, range: NSRange(location: 0, length: nsGml.length))
+
         var rings: [[CLLocationCoordinate2D]] = []
 
-        switch geomType {
-        case "Polygon":
-            guard let rawRings = geometry["coordinates"] as? [[[Double]]] else {
-                throw CadastroError.parseError
-            }
-            rings = rawRings.map { ring in
-                ring.map { CLLocationCoordinate2D(latitude: $0[1], longitude: $0[0]) }
+        for match in matches {
+            guard match.numberOfRanges > 1 else { continue }
+            let captureRange = match.range(at: 1)
+            guard captureRange.location != NSNotFound else { continue }
+            let posListStr = nsGml.substring(with: captureRange)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // Values are space-separated; pairs are (Easting, Northing) in EPSG:25830
+            let values = posListStr
+                .components(separatedBy: .whitespacesAndNewlines)
+                .filter { !$0.isEmpty }
+                .compactMap(Double.init)
+
+            guard values.count >= 6 else { continue }   // need at least 3 points (2 coords each)
+
+            var ring: [CLLocationCoordinate2D] = []
+            var i = 0
+            while i + 1 < values.count {
+                let coord = CoordinateConverter.utmToLatLon(
+                    easting:  values[i],
+                    northing: values[i + 1],
+                    epsg:     25830
+                )
+                ring.append(coord)
+                i += 2
             }
 
-        case "MultiPolygon":
-            guard let rawPolygons = geometry["coordinates"] as? [[[[Double]]]] else {
-                throw CadastroError.parseError
-            }
-            for polygon in rawPolygons {
-                for ring in polygon {
-                    rings.append(ring.map { CLLocationCoordinate2D(latitude: $0[1], longitude: $0[0]) })
-                }
+            // The GML polygon is already closed (first == last); drop the duplicate
+            if ring.count > 1,
+               ring.first!.latitude  == ring.last!.latitude,
+               ring.first!.longitude == ring.last!.longitude {
+                ring.removeLast()
             }
 
-        default:
-            throw CadastroError.unsupportedGeometry
+            if !ring.isEmpty { rings.append(ring) }
         }
 
         guard !rings.isEmpty else { throw CadastroError.noCoordinates }
-        return CadastralFeature(cadastralRef: ref, coordinates: rings)
+        return rings
+    }
+
+    // MARK: XML helper
+
+    private func xmlValue(_ xml: String, tag: String) -> String? {
+        guard
+            let start = xml.range(of: "<\(tag)>"),
+            let end   = xml.range(of: "</\(tag)>", range: start.upperBound..<xml.endIndex)
+        else { return nil }
+        return String(xml[start.upperBound..<end.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
+
+// MARK: Errors
 
 enum CadastroError: LocalizedError {
     case emptyReference, invalidURL, serverError, parseError
@@ -123,8 +166,8 @@ enum CadastroError: LocalizedError {
         case .serverError:         return "Error en el servidor del catastro"
         case .parseError:          return "Error al procesar la respuesta"
         case .unsupportedGeometry: return "Geometría no soportada"
-        case .noCoordinates:       return "La parcela no tiene coordenadas"
-        case .notFound:            return "Referencia catastral no encontrada"
+        case .noCoordinates:       return "La parcela no tiene coordenadas en el WFS"
+        case .notFound:            return "Referencia catastral no encontrada. Verifica provincia y municipio."
         }
     }
 }
