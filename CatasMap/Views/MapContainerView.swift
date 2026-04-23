@@ -7,19 +7,15 @@ struct MapContainerView: View {
 
     @State private var showSaveSheet = false
     @State private var saveName = ""
-    @State private var saveAsManual = false
-    @State private var showSaveAlert = false
 
     var body: some View {
         ZStack {
-            // Full-screen map
             mapLayer
 
-            // Overlay controls
             VStack(spacing: 0) {
                 topBar
                 Spacer()
-                if vm.hasContent {
+                if vm.hasParcel || vm.hasDrawing {
                     metricsBar
                 }
                 if vm.isDrawingMode {
@@ -28,67 +24,73 @@ struct MapContainerView: View {
             }
         }
         .ignoresSafeArea(edges: .top)
+        // Confirmación para limpiar dibujo previo y redibujar
+        .confirmationDialog(
+            "¿Limpiar medición actual?",
+            isPresented: Bindable(vm).showClearDrawingConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Limpiar y redibujar", role: .destructive) {
+                vm.confirmClearAndDraw()
+            }
+            Button("Cancelar", role: .cancel) {}
+        } message: {
+            Text("Se borrará tu medición actual para que puedas dibujar una nueva.")
+        }
         .sheet(isPresented: $showSaveSheet) { saveSheet }
     }
 
-    // MARK: Map
+    // MARK: Mapa
 
     private var mapLayer: some View {
-        @Bindable var bvm = vm
-        return MapKitView(
-            mapType: vm.mapType == .standard ? .standard : .satellite,
-            flyToRegion: vm.flyToRegion,
+        MapKitView(
+            mapType:         vm.mapType == .standard ? .standard : .satellite,
+            flyToRegion:     vm.flyToRegion,
             parcelCoordinates: vm.parcel?.coordinates ?? [],
-            drawnPoints: vm.drawnPoints,
-            isDrawingMode: vm.isDrawingMode,
+            drawnPoints:     vm.drawnPoints,
+            isDrawingMode:   vm.isDrawingMode,
             isDrawingClosed: vm.isDrawingClosed,
-            onTap: { coord in vm.addDrawingPoint(coord) }
+            onTap:           { coord in vm.addDrawingPoint(coord) }
         )
         .ignoresSafeArea()
     }
 
-    // MARK: Top bar
+    // MARK: Barra superior
 
     private var topBar: some View {
         HStack(spacing: 12) {
             Spacer()
 
-            // Map type toggle
+            // Normal / Satélite
             Button {
                 vm.mapType = vm.mapType == .standard ? .satellite : .standard
             } label: {
                 Image(systemName: vm.mapType == .standard ? "globe" : "map")
-                    .foregroundStyle(.white)
-                    .padding(10)
-                    .background(.ultraThinMaterial, in: Circle())
+                    .iconStyle()
             }
 
-            // Drawing mode toggle
-            Button {
-                if vm.isDrawingMode {
-                    vm.isDrawingMode = false
-                } else {
-                    vm.isDrawingMode = true
-                    vm.isDrawingClosed = false
+            // Lápiz: dibujar / salir del modo dibujo
+            if vm.hasParcel {
+                Button {
+                    if vm.isDrawingMode {
+                        vm.exitDrawingMode()
+                    } else {
+                        vm.requestDrawingMode()
+                    }
+                } label: {
+                    Image(systemName: vm.isDrawingMode ? "pencil.slash" : "pencil")
+                        .iconStyle(active: vm.isDrawingMode)
                 }
-            } label: {
-                Image(systemName: vm.isDrawingMode ? "pencil.slash" : "pencil")
-                    .foregroundStyle(vm.isDrawingMode ? .orange : .white)
-                    .padding(10)
-                    .background(.ultraThinMaterial, in: Circle())
             }
 
-            // Save button
-            if vm.hasContent {
+            // Guardar (disponible si hay parcela catastral cargada)
+            if vm.hasParcel {
                 Button {
                     saveName = vm.parcel?.cadastralRef ?? "Mi finca"
-                    saveAsManual = !vm.drawnPoints.isEmpty
                     showSaveSheet = true
                 } label: {
                     Image(systemName: "square.and.arrow.down")
-                        .foregroundStyle(.white)
-                        .padding(10)
-                        .background(.ultraThinMaterial, in: Circle())
+                        .iconStyle()
                 }
             }
         }
@@ -97,65 +99,112 @@ struct MapContainerView: View {
         .padding(.bottom, 8)
     }
 
-    // MARK: Metrics bar
+    // MARK: Panel de métricas (dos capas)
 
     private var metricsBar: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Label(vm.formattedArea, systemImage: "square.dashed")
-                    .font(.footnote.weight(.semibold))
-                Label(vm.formattedPerimeter, systemImage: "ruler")
-                    .font(.footnote)
+        VStack(spacing: 0) {
+            // ── Capa catastral (azul) ──────────────────────────────────────
+            if vm.hasParcel {
+                HStack(spacing: 8) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(.blue)
+                        .frame(width: 12, height: 12)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Catastro: \(vm.formattedCadastralArea)")
+                            .font(.footnote.weight(.semibold))
+                        Text(vm.formattedCadastralPerimeter)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text(vm.parcel?.cadastralRef ?? "")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
             }
-            Spacer()
-            if let ref = vm.parcel?.cadastralRef {
-                Text(ref)
-                    .font(.caption2)
+
+            // ── Capa de medición propia (rojo) ─────────────────────────────
+            if vm.hasDrawing {
+                Divider().padding(.horizontal, 12)
+                HStack(spacing: 8) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(.red)
+                        .frame(width: 12, height: 12)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Mi medición: \(vm.formattedUserArea)")
+                            .font(.footnote.weight(.semibold))
+                        Text(vm.formattedUserPerimeter)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    // Diferencia de área
+                    let diff = vm.userArea - vm.cadastralArea
+                    if vm.hasParcel {
+                        Text(diff >= 0 ? "+\(SphericalUtils.formatArea(diff))" : "-\(SphericalUtils.formatArea(abs(diff)))")
+                            .font(.caption2)
+                            .foregroundStyle(abs(diff) / max(vm.cadastralArea, 1) < 0.05 ? .green : .orange)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            }
+
+            // ── Indicador de modo dibujo activo ───────────────────────────
+            if vm.isDrawingMode && !vm.hasDrawing {
+                Divider().padding(.horizontal, 12)
+                Text(vm.drawnPoints.isEmpty
+                     ? "Toca el mapa para añadir puntos"
+                     : vm.drawnPoints.count < 3
+                       ? "Añade al menos 3 puntos"
+                       : "Toca cerca del inicio para cerrar")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
         .background(.ultraThinMaterial)
     }
 
-    // MARK: Drawing toolbar
+    // MARK: Barra de herramientas de dibujo
 
     private var drawingToolbar: some View {
         HStack(spacing: 20) {
-            Button("Deshacer", systemImage: "arrow.uturn.backward") {
+            Button {
                 vm.undoLastPoint()
+            } label: {
+                Label("Deshacer", systemImage: "arrow.uturn.backward")
+                    .font(.footnote)
             }
             .disabled(vm.drawnPoints.isEmpty || vm.isDrawingClosed)
 
             Spacer()
 
-            Text(vm.isDrawingClosed
-                 ? "Polígono cerrado"
-                 : vm.drawnPoints.count < 3
-                   ? "Toca el mapa para añadir puntos"
-                   : "Toca cerca del inicio para cerrar")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Spacer()
-
-            Button("Cerrar", systemImage: "checkmark.circle") {
+            Button {
                 vm.closePolygon()
+            } label: {
+                Label("Cerrar polígono", systemImage: "checkmark.circle.fill")
+                    .font(.footnote.weight(.semibold))
             }
             .disabled(vm.drawnPoints.count < 3 || vm.isDrawingClosed)
+            .tint(.green)
 
-            Button("Borrar", systemImage: "trash") {
+            Button(role: .destructive) {
                 vm.clearDrawing()
+            } label: {
+                Image(systemName: "trash")
             }
-            .foregroundStyle(.red)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.ultraThinMaterial)
     }
 
-    // MARK: Save sheet
+    // MARK: Sheet de guardado
 
     private var saveSheet: some View {
         NavigationStack {
@@ -164,37 +213,57 @@ struct MapContainerView: View {
                     TextField("Nombre", text: $saveName)
                 }
 
-                if !vm.drawnPoints.isEmpty && vm.parcel != nil {
-                    Section("¿Qué guardar?") {
-                        Picker("", selection: $saveAsManual) {
-                            Text("Parcela catastral").tag(false)
-                            Text("Dibujo libre").tag(true)
-                        }
-                        .pickerStyle(.segmented)
-                    }
+                Section("Capa catastral (oficial)") {
+                    LabeledContent("Área",      value: vm.formattedCadastralArea)
+                    LabeledContent("Perímetro", value: vm.formattedCadastralPerimeter)
                 }
 
-                Section("Métricas") {
-                    LabeledContent("Área", value: vm.formattedArea)
-                    LabeledContent("Perímetro", value: vm.formattedPerimeter)
+                if vm.hasDrawing {
+                    Section("Mi medición") {
+                        LabeledContent("Área",      value: vm.formattedUserArea)
+                        LabeledContent("Perímetro", value: vm.formattedUserPerimeter)
+                        let diff = vm.userArea - vm.cadastralArea
+                        let pct  = diff / max(vm.cadastralArea, 1) * 100
+                        LabeledContent("Diferencia vs catastro",
+                                       value: String(format: "%+.1f m² (%+.1f%%)", diff, pct))
+                    }
+                } else {
+                    Section {
+                        Label("Puedes añadir tu medición usando el lápiz en el mapa.",
+                              systemImage: "pencil.circle")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
-            .navigationTitle("Guardar finca")
+            .navigationTitle(vm.currentSavedParcelID == nil ? "Guardar finca" : "Actualizar finca")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancelar") { showSaveSheet = false }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Guardar") {
-                        if let parcel = vm.makeParcelForSaving(name: saveName, isManual: saveAsManual) {
-                            persistence.save(parcel)
-                        }
+                    Button(vm.currentSavedParcelID == nil ? "Guardar" : "Actualizar") {
+                        let parcel = vm.makeParcelForSaving(name: saveName)
+                        persistence.save(parcel)
+                        // Si es nueva, marcarla como la que estamos editando
+                        vm.currentSavedParcelID = parcel.id
                         showSaveSheet = false
                     }
                     .disabled(saveName.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
         }
+    }
+}
+
+// MARK: - Helper view modifier
+
+private extension Image {
+    func iconStyle(active: Bool = false) -> some View {
+        self
+            .foregroundStyle(active ? .orange : .white)
+            .padding(10)
+            .background(.ultraThinMaterial, in: Circle())
     }
 }

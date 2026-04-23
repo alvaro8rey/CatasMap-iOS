@@ -3,28 +3,33 @@ import CoreLocation
 
 struct SavedParcel: Codable, Identifiable {
     var id: UUID = UUID()
-    var cadastralRef: String
-    var coordinates: [CoordinatePoint]
-    var area: Double
-    var perimeter: Double
-    var savedDate: Date = Date()
     var customName: String
-    var isManualDrawing: Bool
+    var savedDate: Date = Date()
 
-    var formattedArea: String {
-        let ha = Int(area / 10000)
-        let remaining = area.truncatingRemainder(dividingBy: 10000)
-        let a = Int(remaining / 100)
-        let ca = Int(remaining.truncatingRemainder(dividingBy: 100))
-        return "\(ha) Ha \(a) A \(ca) Ca"
+    // ── Capa 1: Polígono oficial del catastro (inmutable) ──────────────────
+    var cadastralRef: String
+    var cadastralCoordinates: [CoordinatePoint]
+    var cadastralArea: Double
+    var cadastralPerimeter: Double
+
+    // ── Capa 2: Medición propia del usuario (editable) ─────────────────────
+    var userCoordinates: [CoordinatePoint]?
+    var userArea: Double?
+    var userPerimeter: Double?
+
+    var hasUserDrawing: Bool { !(userCoordinates?.isEmpty ?? true) }
+
+    // Formatted
+    var formattedCadastralArea: String      { SphericalUtils.formatArea(cadastralArea) }
+    var formattedUserArea: String?          { userArea.map { SphericalUtils.formatArea($0) } }
+    var formattedCadastralPerimeter: String { String(format: "%.1f m", cadastralPerimeter) }
+    var formattedUserPerimeter: String?     { userPerimeter.map { String(format: "%.1f m", $0) } }
+
+    var clCadastralCoordinates: [CLLocationCoordinate2D] {
+        cadastralCoordinates.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
     }
-
-    var formattedPerimeter: String {
-        String(format: "%.1f m", perimeter)
-    }
-
-    var clCoordinates: [CLLocationCoordinate2D] {
-        coordinates.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+    var clUserCoordinates: [CLLocationCoordinate2D]? {
+        userCoordinates?.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
     }
 }
 
