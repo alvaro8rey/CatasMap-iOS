@@ -3,30 +3,65 @@ import CoreLocation
 
 struct CadastralFeature {
     let cadastralRef: String
-    let coordinates: [[CLLocationCoordinate2D]]  // outer ring first; inner rings are holes
+    let coordinates: [[CLLocationCoordinate2D]]
 }
 
 class CadastroService {
     static let shared = CadastroService()
 
-    // WFS endpoint for polygon geometry (coordinates in UTM EPSG:25830)
-    private let wfsBase = "https://www.catastro.minhap.es/wfs/DNPRC_BT_Polygon"
+    // Official catastro INSPIRE WFS endpoints (tried in order)
+    private let endpoints = [
+        "https://ovc.catastro.meh.es/INSPIRE/wfscatastro.aspx",
+        "https://www.catastro.minhap.es/INSPIRE/CadastralParcels/wfs",
+    ]
 
     func searchParcel(ref: String) async throws -> CadastralFeature {
         let cleanRef = ref.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanRef.isEmpty else { throw CadastroError.emptyReference }
 
-        let encodedRef = cleanRef.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? cleanRef
-        let urlString = "\(wfsBase)?service=WFS&version=2.0.0&request=GetFeature&typeName=DNPRC_BT_Polygon&CQL_FILTER=refcat='\(encodedRef)'&outputFormat=application/json"
+        var lastError: Error = CadastroError.serverError
 
-        guard let url = URL(string: urlString) else { throw CadastroError.invalidURL }
+        for base in endpoints {
+            do {
+                return try await fetchFromEndpoint(base, ref: cleanRef)
+            } catch CadastroError.notFound {
+                throw CadastroError.notFound          // definitive: parcel doesn't exist
+            } catch CadastroError.parseError {
+                throw CadastroError.parseError        // definitive: bad data
+            } catch {
+                lastError = error                      // network/DNS: try next endpoint
+            }
+        }
 
-        let (data, response) = try await URLSession.shared.data(from: url)
+        throw lastError
+    }
+
+    // MARK: Private
+
+    private func fetchFromEndpoint(_ base: String, ref: String) async throws -> CadastralFeature {
+        // Use URLComponents so single quotes in CQL_FILTER are percent-encoded automatically
+        var comps = URLComponents(string: base)!
+        comps.queryItems = [
+            URLQueryItem(name: "SERVICE",     value: "WFS"),
+            URLQueryItem(name: "VERSION",     value: "2.0.0"),
+            URLQueryItem(name: "REQUEST",     value: "GetFeature"),
+            URLQueryItem(name: "TYPENAMES",   value: "cp:CadastralParcel"),
+            URLQueryItem(name: "CQL_FILTER",  value: "nationalCadastralReference='\(ref)'"),
+            URLQueryItem(name: "outputFormat",value: "application/json"),
+            URLQueryItem(name: "SRSNAME",     value: "EPSG:4326"),   // get WGS84 directly
+        ]
+
+        guard let url = comps.url else { throw CadastroError.invalidURL }
+
+        var request = URLRequest(url: url, timeoutInterval: 20)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw CadastroError.serverError
         }
 
-        return try parseGeoJSON(data: data, ref: cleanRef)
+        return try parseGeoJSON(data: data, ref: ref)
     }
 
     private func parseGeoJSON(data: Data, ref: String) throws -> CadastralFeature {
@@ -39,13 +74,14 @@ class CadastroService {
         }
 
         guard
-            let feature = features.first,
+            let feature  = features.first,
             let geometry = feature["geometry"] as? [String: Any],
             let geomType = geometry["type"] as? String
         else {
             throw CadastroError.parseError
         }
 
+        // SRSNAME=EPSG:4326 → coordinates arrive as [longitude, latitude]
         var rings: [[CLLocationCoordinate2D]] = []
 
         switch geomType {
@@ -54,7 +90,7 @@ class CadastroService {
                 throw CadastroError.parseError
             }
             rings = rawRings.map { ring in
-                ring.map { CoordinateConverter.utmToLatLon(easting: $0[0], northing: $0[1]) }
+                ring.map { CLLocationCoordinate2D(latitude: $0[1], longitude: $0[0]) }
             }
 
         case "MultiPolygon":
@@ -63,7 +99,7 @@ class CadastroService {
             }
             for polygon in rawPolygons {
                 for ring in polygon {
-                    rings.append(ring.map { CoordinateConverter.utmToLatLon(easting: $0[0], northing: $0[1]) })
+                    rings.append(ring.map { CLLocationCoordinate2D(latitude: $0[1], longitude: $0[0]) })
                 }
             }
 
