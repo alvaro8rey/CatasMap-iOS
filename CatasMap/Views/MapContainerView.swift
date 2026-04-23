@@ -266,11 +266,11 @@ struct MapContainerView: View {
                             Label("Guardar como nueva copia", systemImage: "doc.on.doc")
                                 .frame(maxWidth: .infinity)
                         }
-                        .disabled(!nameOK || nameUsedElsewhere)
-                        .tint(nameUsedElsewhere ? .red : .secondary)
+                        .disabled(!nameOK || nameExistsAnywhere)
+                        .tint(nameExistsAnywhere ? .red : .secondary)
                     }
                 } footer: {
-                    if nameUsedElsewhere {
+                    if nameExistsAnywhere {
                         Text("Ese nombre ya está en uso. Cambia el nombre para guardar una copia.")
                             .foregroundStyle(.red)
                     } else if vm.currentSavedParcelID != nil {
@@ -298,13 +298,22 @@ struct MapContainerView: View {
         showSaveSheet = false
     }
 
-    /// True si el nombre ya lo usa otra finca distinta a la actual
+    /// True si el nombre ya lo usa otra finca distinta a la actual (para "Guardar")
     private var nameUsedElsewhere: Bool {
         let trimmed = saveName.trimmingCharacters(in: .whitespaces).lowercased()
         guard !trimmed.isEmpty else { return false }
         return persistence.savedParcels.contains {
             $0.customName.trimmingCharacters(in: .whitespaces).lowercased() == trimmed
             && $0.id != vm.currentSavedParcelID
+        }
+    }
+
+    /// True si el nombre ya existe en cualquier finca (para "Guardar como nueva copia")
+    private var nameExistsAnywhere: Bool {
+        let trimmed = saveName.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !trimmed.isEmpty else { return false }
+        return persistence.savedParcels.contains {
+            $0.customName.trimmingCharacters(in: .whitespaces).lowercased() == trimmed
         }
     }
 }
