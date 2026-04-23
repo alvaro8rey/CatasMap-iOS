@@ -43,12 +43,24 @@ struct SphericalUtils {
         return earthRadius * 2 * atan2(sqrt(a), sqrt(1 - a))
     }
 
-    // Format m² as "X Ha Y A Z Ca"
+    // Format m² as "X Ha Y A Z Ca (N m²)"
     static func formatArea(_ m2: Double) -> String {
-        let ha = Int(m2 / 10000)
+        let ha   = Int(m2 / 10000)
         let rem1 = m2.truncatingRemainder(dividingBy: 10000)
-        let a  = Int(rem1 / 100)
-        let ca = Int(rem1.truncatingRemainder(dividingBy: 100))
-        return "\(ha) Ha \(a) A \(ca) Ca"
+        let a    = Int(rem1 / 100)
+        let ca   = Int(rem1.truncatingRemainder(dividingBy: 100))
+        let m2Str = m2Formatted(m2)
+        return "\(ha) Ha \(a) A \(ca) Ca (\(m2Str) m²)"
+    }
+
+    // "1265" or "12.340" with thousands separator
+    private static func m2Formatted(_ m2: Double) -> String {
+        let n = Int(m2.rounded())
+        if n >= 1000 {
+            let thousands = n / 1000
+            let rest      = n % 1000
+            return String(format: "%d.%03d", thousands, rest)
+        }
+        return "\(n)"
     }
 }
