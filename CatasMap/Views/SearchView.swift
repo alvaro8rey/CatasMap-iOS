@@ -55,7 +55,7 @@ struct SearchView: View {
         }
     }
 
-    private var referenceSection: some View {
+    @ViewBuilder private var referenceSection: some View {
         Section {
             HStack {
                 TextField("Ej: 27038A01800039", text: Bindable(vm).cadastralRef)
