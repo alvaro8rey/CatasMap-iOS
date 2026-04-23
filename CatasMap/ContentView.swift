@@ -1,24 +1,16 @@
-//
-//  ContentView.swift
-//  CatasMap
-//
-//  Created by alvaro on 23/04/2026.
-//
-
 import SwiftUI
 
+// Root view — delegates directly to MainTabView via App scene.
+// Kept for Xcode preview compatibility.
 struct ContentView: View {
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
-        }
-        .padding()
+        MainTabView()
     }
 }
 
 #Preview {
     ContentView()
+        .environment(SearchViewModel())
+        .environment(MapViewModel())
+        .environment(PersistenceController())
 }

@@ -1,17 +1,17 @@
-//
-//  CatasMapApp.swift
-//  CatasMap
-//
-//  Created by alvaro on 23/04/2026.
-//
-
 import SwiftUI
 
 @main
 struct CatasMapApp: App {
+    @State private var searchViewModel = SearchViewModel()
+    @State private var mapViewModel = MapViewModel()
+    private let persistence = PersistenceController.shared
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            MainTabView()
+                .environment(searchViewModel)
+                .environment(mapViewModel)
+                .environment(persistence)
         }
     }
 }
