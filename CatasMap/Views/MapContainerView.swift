@@ -242,24 +242,22 @@ struct MapContainerView: View {
                     }
                 }
 
-                // Botones de guardado
+                // ── Guardar (sobreescribir o crear nuevo) ─────────────────
                 let nameOK = !saveName.trimmingCharacters(in: .whitespaces).isEmpty
                 Section {
-                    // Guardar (sobreescribir si ya existe, o crear nuevo)
                     Button {
                         save(asNew: false)
                     } label: {
-                        Label(
-                            vm.currentSavedParcelID == nil ? "Guardar" : "Guardar",
-                            systemImage: "square.and.arrow.down.fill"
-                        )
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity)
+                        Label("Guardar", systemImage: "square.and.arrow.down.fill")
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity)
                     }
                     .disabled(!nameOK)
+                }
 
-                        // Guardar como — solo visible al editar una finca existente
-                    if vm.currentSavedParcelID != nil {
+                // ── Guardar como nueva copia (solo al editar existente) ───
+                if vm.currentSavedParcelID != nil {
+                    Section {
                         Button {
                             save(asNew: true)
                         } label: {
@@ -267,15 +265,12 @@ struct MapContainerView: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .disabled(!nameOK || nameExistsAnywhere)
-                        .tint(nameExistsAnywhere ? .red : .secondary)
-                    }
-                } footer: {
-                    if nameExistsAnywhere {
-                        Text("Ese nombre ya está en uso. Cambia el nombre para guardar una copia.")
-                            .foregroundStyle(.red)
-                    } else if vm.currentSavedParcelID != nil {
-                        Text("\"Guardar\" sobreescribe esta finca. \"Guardar como nueva copia\" crea un registro independiente.")
-                            .font(.caption)
+                    } footer: {
+                        if nameExistsAnywhere {
+                            Text("Ese nombre ya está en uso. Cámbialo para poder guardar una copia.")
+                        } else {
+                            Text("Crea un registro independiente con el nombre escrito arriba.")
+                        }
                     }
                 }
             }
