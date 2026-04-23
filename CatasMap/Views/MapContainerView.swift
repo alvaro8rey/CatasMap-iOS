@@ -86,12 +86,13 @@ struct MapContainerView: View {
             // Guardar (disponible si hay parcela catastral cargada)
             if vm.hasParcel {
                 Button {
-                    // Pre-rellenar con el nombre ya guardado, no con la referencia
                     if let id = vm.currentSavedParcelID,
                        let existing = persistence.savedParcels.first(where: { $0.id == id }) {
+                        // Finca ya guardada → usar el nombre que tiene
                         saveName = existing.customName
                     } else {
-                        saveName = ""
+                        // Finca nueva → usar la referencia catastral como nombre por defecto
+                        saveName = vm.parcel?.cadastralRef ?? "Mi finca"
                     }
                     showSaveSheet = true
                 } label: {
