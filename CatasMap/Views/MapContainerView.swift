@@ -86,7 +86,13 @@ struct MapContainerView: View {
             // Guardar (disponible si hay parcela catastral cargada)
             if vm.hasParcel {
                 Button {
-                    saveName = vm.parcel?.cadastralRef ?? "Mi finca"
+                    // Pre-rellenar con el nombre ya guardado, no con la referencia
+                    if let id = vm.currentSavedParcelID,
+                       let existing = persistence.savedParcels.first(where: { $0.id == id }) {
+                        saveName = existing.customName
+                    } else {
+                        saveName = ""
+                    }
                     showSaveSheet = true
                 } label: {
                     Image(systemName: "square.and.arrow.down")
@@ -252,7 +258,7 @@ struct MapContainerView: View {
                     }
                     .disabled(!nameOK)
 
-                    // Guardar como — solo visible al editar una finca existente
+                        // Guardar como — solo visible al editar una finca existente
                     if vm.currentSavedParcelID != nil {
                         Button {
                             save(asNew: true)
@@ -260,12 +266,15 @@ struct MapContainerView: View {
                             Label("Guardar como nueva copia", systemImage: "doc.on.doc")
                                 .frame(maxWidth: .infinity)
                         }
-                        .disabled(!nameOK)
-                        .tint(.secondary)
+                        .disabled(!nameOK || nameUsedElsewhere)
+                        .tint(nameUsedElsewhere ? .red : .secondary)
                     }
                 } footer: {
-                    if vm.currentSavedParcelID != nil {
-                        Text("\"Guardar\" sobreescribe esta finca. \"Guardar como nueva copia\" crea un registro independiente con el nombre que hayas escrito arriba.")
+                    if nameUsedElsewhere {
+                        Text("Ese nombre ya está en uso. Cambia el nombre para guardar una copia.")
+                            .foregroundStyle(.red)
+                    } else if vm.currentSavedParcelID != nil {
+                        Text("\"Guardar\" sobreescribe esta finca. \"Guardar como nueva copia\" crea un registro independiente.")
                             .font(.caption)
                     }
                 }
@@ -283,11 +292,20 @@ struct MapContainerView: View {
     private func save(asNew: Bool) {
         let parcel = vm.makeParcelForSaving(name: saveName, asNew: asNew)
         persistence.save(parcel)
-        // Si es nueva o se guardó como copia, actualizar el ID activo
         if asNew || vm.currentSavedParcelID == nil {
             vm.currentSavedParcelID = parcel.id
         }
         showSaveSheet = false
+    }
+
+    /// True si el nombre ya lo usa otra finca distinta a la actual
+    private var nameUsedElsewhere: Bool {
+        let trimmed = saveName.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !trimmed.isEmpty else { return false }
+        return persistence.savedParcels.contains {
+            $0.customName.trimmingCharacters(in: .whitespaces).lowercased() == trimmed
+            && $0.id != vm.currentSavedParcelID
+        }
     }
 }
 
