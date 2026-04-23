@@ -209,8 +209,8 @@ struct MapContainerView: View {
     private var saveSheet: some View {
         NavigationStack {
             Form {
-                Section("Nombre de la finca") {
-                    TextField("Nombre", text: $saveName)
+                Section("Nombre") {
+                    TextField("Nombre de la finca", text: $saveName)
                 }
 
                 Section("Capa catastral (oficial)") {
@@ -224,36 +224,70 @@ struct MapContainerView: View {
                         LabeledContent("Perímetro", value: vm.formattedUserPerimeter)
                         let diff = vm.userArea - vm.cadastralArea
                         let pct  = diff / max(vm.cadastralArea, 1) * 100
-                        LabeledContent("Diferencia vs catastro",
+                        LabeledContent("Diferencia",
                                        value: String(format: "%+.1f m² (%+.1f%%)", diff, pct))
                     }
                 } else {
                     Section {
-                        Label("Puedes añadir tu medición usando el lápiz en el mapa.",
+                        Label("Puedes añadir tu medición usando el lápiz.",
                               systemImage: "pencil.circle")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
                 }
+
+                // Botones de guardado
+                let nameOK = !saveName.trimmingCharacters(in: .whitespaces).isEmpty
+                Section {
+                    // Guardar (sobreescribir si ya existe, o crear nuevo)
+                    Button {
+                        save(asNew: false)
+                    } label: {
+                        Label(
+                            vm.currentSavedParcelID == nil ? "Guardar" : "Guardar",
+                            systemImage: "square.and.arrow.down.fill"
+                        )
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .disabled(!nameOK)
+
+                    // Guardar como — solo visible al editar una finca existente
+                    if vm.currentSavedParcelID != nil {
+                        Button {
+                            save(asNew: true)
+                        } label: {
+                            Label("Guardar como nueva copia", systemImage: "doc.on.doc")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .disabled(!nameOK)
+                        .tint(.secondary)
+                    }
+                } footer: {
+                    if vm.currentSavedParcelID != nil {
+                        Text("\"Guardar\" sobreescribe esta finca. \"Guardar como nueva copia\" crea un registro independiente con el nombre que hayas escrito arriba.")
+                            .font(.caption)
+                    }
+                }
             }
-            .navigationTitle(vm.currentSavedParcelID == nil ? "Guardar finca" : "Actualizar finca")
+            .navigationTitle(vm.currentSavedParcelID == nil ? "Guardar finca" : "Guardar cambios")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancelar") { showSaveSheet = false }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(vm.currentSavedParcelID == nil ? "Guardar" : "Actualizar") {
-                        let parcel = vm.makeParcelForSaving(name: saveName)
-                        persistence.save(parcel)
-                        // Si es nueva, marcarla como la que estamos editando
-                        vm.currentSavedParcelID = parcel.id
-                        showSaveSheet = false
-                    }
-                    .disabled(saveName.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
             }
         }
+    }
+
+    private func save(asNew: Bool) {
+        let parcel = vm.makeParcelForSaving(name: saveName, asNew: asNew)
+        persistence.save(parcel)
+        // Si es nueva o se guardó como copia, actualizar el ID activo
+        if asNew || vm.currentSavedParcelID == nil {
+            vm.currentSavedParcelID = parcel.id
+        }
+        showSaveSheet = false
     }
 }
 

@@ -153,7 +153,9 @@ class MapViewModel {
 
     // MARK: Guardar
 
-    func makeParcelForSaving(name: String) -> SavedParcel {
+    // asNew = false → sobreescribe el registro existente (mismo UUID)
+    // asNew = true  → crea una copia nueva (UUID nuevo)
+    func makeParcelForSaving(name: String, asNew: Bool = false) -> SavedParcel {
         let catCoords = (parcel?.coordinates.first ?? [])
             .map { CoordinatePoint(latitude: $0.latitude, longitude: $0.longitude) }
 
@@ -161,8 +163,10 @@ class MapViewModel {
             ? drawnPoints.map { CoordinatePoint(latitude: $0.latitude, longitude: $0.longitude) }
             : nil
 
+        let id = asNew ? UUID() : (currentSavedParcelID ?? UUID())
+
         return SavedParcel(
-            id:                   currentSavedParcelID ?? UUID(),
+            id:                   id,
             customName:           name,
             cadastralRef:         parcel?.cadastralRef ?? "",
             cadastralCoordinates: catCoords,
